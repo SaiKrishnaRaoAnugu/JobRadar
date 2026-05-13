@@ -1,0 +1,17 @@
+# Virtual environment
+jobradar_env/
+
+# Environment variables
+.env
+backend/.env
+
+# Database
+*.db
+
+# Python cache
+__pycache__/
+*.pyc
+
+# IDE
+.vscode/
+.idea/

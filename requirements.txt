@@ -1,0 +1,21 @@
+# Core
+python-dotenv==1.0.0
+requests==2.31.0
+httpx==0.27.0
+
+# AI
+groq==0.4.1
+
+# Backend
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+sqlalchemy==2.0.25
+psycopg2-binary==2.9.9
+pydantic==2.5.3
+PyJWT==2.8.0
+
+# File uploads & resume parsing (ATS feature)
+python-multipart==0.0.9
+pdfplumber==0.10.3
+python-docx==1.1.0
+boto3==1.34.0
