@@ -7,15 +7,15 @@ httpx==0.27.0
 groq==0.4.1
 
 # Backend
-fastapi==0.109.0
-uvicorn[standard]==0.27.0
-sqlalchemy==2.0.25
-psycopg2-binary==2.9.9
-pydantic==2.5.3
-PyJWT==2.8.0
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+sqlalchemy==2.0.36
+psycopg2-binary==2.9.10
+pydantic==2.10.6
+PyJWT==2.10.1
 
 # File uploads & resume parsing (ATS feature)
-python-multipart==0.0.9
-pdfplumber==0.10.3
-python-docx==1.1.0
-boto3==1.34.0
+python-multipart==0.0.20
+pdfplumber==0.11.4
+python-docx==1.1.2
+boto3==1.36.0
