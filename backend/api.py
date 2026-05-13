@@ -179,9 +179,11 @@ async def search_jobs(params: SearchParams):
             all_jobs.extend(search_weworkremotely(params.job_title, params.max_results_per_source))
             all_jobs.extend(search_workingnomads(params.job_title, params.max_results_per_source))
 
-        # Mixed/global sources — skip when onsite is selected (no reliable country filter)
+        # Arbeitnow: Europe-focused, includes on-site jobs — runs for all modes
+        all_jobs.extend(search_arbeitnow(params.job_title, params.location, params.max_results_per_source))
+
+        # Remote/global sources — skip when onsite is selected
         if mode in ('', 'remote', 'hybrid'):
-            all_jobs.extend(search_arbeitnow(params.job_title, params.location, params.max_results_per_source))
             all_jobs.extend(search_hackernews(params.job_title, params.max_results_per_source))
             all_jobs.extend(search_graphql_jobs(params.job_title, params.max_results_per_source))
 
