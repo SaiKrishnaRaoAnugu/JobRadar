@@ -1,6 +1,7 @@
 import os
 import jwt
 import httpx
+from urllib.parse import urlencode
 from datetime import datetime, timedelta
 from fastapi import HTTPException, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -56,14 +57,14 @@ def optional_user(credentials: HTTPAuthorizationCredentials = Depends(_bearer)):
 
 
 def google_auth_url(state: str = '') -> str:
-    params = (
-        f'client_id={GOOGLE_CLIENT_ID}'
-        f'&redirect_uri={GOOGLE_REDIRECT_URI}'
-        f'&response_type=code'
-        f'&scope=openid%20email%20profile'
-        f'&access_type=offline'
-        f'&state={state}'
-    )
+    params = urlencode({
+        'client_id':     GOOGLE_CLIENT_ID,
+        'redirect_uri':  GOOGLE_REDIRECT_URI,
+        'response_type': 'code',
+        'scope':         'openid email profile',
+        'access_type':   'offline',
+        'state':         state,
+    })
     return f'{GOOGLE_AUTH_URL}?{params}'
 
 
