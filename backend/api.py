@@ -92,6 +92,14 @@ def serve_frontend():
 
 # ── Google OAuth ─────────────────────────────────────────────────────────────
 
+@app.get("/auth/debug-oauth")
+def debug_oauth():
+    return {
+        "client_id": GOOGLE_CLIENT_ID,
+        "redirect_uri": os.getenv("GOOGLE_REDIRECT_URI"),
+        "oauth_url": google_auth_url(),
+    }
+
 @app.get("/auth/google")
 def google_login():
     if not GOOGLE_CLIENT_ID:
