@@ -1,0 +1,6 @@
+jobradar_env/
+__pycache__/
+*.pyc
+*.db
+backend/.env
+.git/
