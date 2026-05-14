@@ -657,10 +657,11 @@
               <!-- Fallback: partial description from API -->
               <template x-if="!selectedJob?.jdLoading && !selectedJob?.fullDescription && selectedJob?.description">
                 <div>
-                  <div class="text-xs mb-3 px-3 py-2 rounded" style="background:rgba(251,191,36,0.08);border:1px solid rgba(251,191,36,0.2);color:#fbbf24">
-                    Could not load full description from the job board — showing API summary below.
-                  </div>
                   <div class="text-sm leading-relaxed whitespace-pre-wrap" style="color:var(--t2);line-height:1.8" x-text="selectedJob?.description"></div>
+                  <div class="mt-4 text-xs" style="color:var(--t3)">
+                    Preview from search API ·
+                    <a :href="selectedJob?.url" target="_blank" rel="noopener noreferrer" style="color:var(--accent);text-decoration:underline">View full JD on <span x-text="selectedJob?.source"></span></a>
+                  </div>
                 </div>
               </template>
 

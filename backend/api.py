@@ -437,118 +437,139 @@ def delete_resume(current_user: dict = Depends(require_user), db: Session = Depe
 # ── Fetch full JD ────────────────────────────────────────────────────────────
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
-    "Accept-Language": "en-US,en;q=0.9",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9,de;q=0.8",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
 }
 
-# CSS selectors for the main JD container (tried in order)
+# CSS selectors for the main JD container (tried in order, most specific first)
 JD_SELECTORS = [
     "[class*='job-description']",
     "[class*='jobDescription']",
     "[class*='job_description']",
     "[id*='job-description']",
     "[id*='jobDescription']",
-    "[class*='description']",
     "[class*='job-detail']",
     "[class*='jobDetail']",
     "[class*='vacancy-description']",
     "[class*='listing-description']",
     "[class*='job-content']",
     "[class*='jobContent']",
+    "[class*='offer-description']",
+    "[class*='advert-detail']",
     "article",
-    "main",
     "[role='main']",
+    "main",
 ]
 
-# Elements whose class/id suggest UI noise — removed before extraction
-_NOISE_ATTRS = [
-    'similar', 'related', 'cookie', 'newsletter', 'sidebar',
-    'apply', 'social', 'share', 'email-alert', 'job-alert',
-    'subscribe', 'signup', 'sign-up', 'recommendation', 'cta',
-    'banner', 'popup', 'modal', 'overlay', 'footer', 'breadcrumb',
-    'navigation', 'suche', 'alert', 'notification',
+# Only remove elements whose class/id is clearly UI chrome — NOT content areas
+_NOISE_CLASSES = [
+    'cookie', 'gdpr', 'consent', 'newsletter', 'email-alert',
+    'job-alert', 'subscribe', 'sign-up', 'signup',
+    'recommendation', 'similar-jobs', 'related-jobs',
+    'popup', 'modal', 'overlay', 'breadcrumb',
 ]
 
-# Line-level patterns that mark the end of the real JD content
+# Text patterns that mark the END of actual JD — stop collecting here
 _CUTOFF_LINES = [
     'ähnliche jobs', 'similar jobs', 'you might also like',
-    'related jobs', 'other jobs', 'more jobs like this',
+    'related jobs', 'more jobs like this', 'other opportunities',
     'job-e-mail', 'jetzt ähnliche', 'nein, danke',
     'mit dem klick auf', 'datenschutzbestimmungen',
     'häufige suchvorgänge', 'zurück zur letzten suche',
-    'cookies zustimmen', 'impressum', 'subscribe to',
+    'cookies zustimmen', 'impressum', 'privacy policy',
     'get email alerts', 'sign up for job alerts',
-    'create a job alert', 'set up job alerts',
-    'agbs', 'datenschutz',
+    'create a job alert', 'set up an alert',
+    'subscribe to', 'agbs', 'terms of service',
+    'jetzt ähnliche jobs', 'job-e-mail bestellen',
 ]
 
-# Short noisy lines to strip out entirely
+# Exact noisy lines to skip (navigation, buttons, etc.)
 _NOISE_LINES = [
-    'schnellbewerbung', 'auf diesen job bewerben', 'neu',
-    'back to search', 'zurück', '❮', '❯', 'apply now',
-    'job-e-mail bestellen', 'jetzt bewerben',
+    'schnellbewerbung', 'auf diesen job bewerben', 'jetzt bewerben',
+    'apply now', 'apply for this job', 'quick apply',
+    'back to search', 'back to results', '❮', '❯', 'neu', 'new',
+    'save job', 'share job', 'print job',
 ]
 
 
 def _clean_jd_text(raw: str) -> str:
-    """Remove navigation noise and truncate at end-of-JD markers."""
+    """Truncate at end-of-JD markers and remove obvious UI-only lines."""
     lines = raw.splitlines()
     cleaned = []
     for line in lines:
-        line = line.strip()
-        if not line:
+        stripped = line.strip()
+        if not stripped:
             continue
-        line_lower = line.lower()
-        # Stop collecting once we hit a section-end marker
-        if any(cutoff in line_lower for cutoff in _CUTOFF_LINES):
+        low = stripped.lower()
+
+        # Stop at section-end markers
+        if any(cutoff in low for cutoff in _CUTOFF_LINES):
             break
-        # Skip known UI-noise lines
-        if any(noise in line_lower for noise in _NOISE_LINES):
+
+        # Skip exact UI-noise lines
+        if any(low == noise or low.startswith(noise) for noise in _NOISE_LINES):
             continue
-        # Skip very short lines that are likely buttons/labels (< 4 words)
-        if len(line.split()) < 4 and not line.endswith(':'):
+
+        # Skip navigation arrows / single characters
+        if len(stripped) <= 2:
             continue
-        cleaned.append(line)
+
+        cleaned.append(stripped)
+
     return "\n".join(cleaned)
 
 
 def _scrape_jd(url: str) -> str:
     try:
-        resp = http_requests.get(url, headers=HEADERS, timeout=12, allow_redirects=True)
+        resp = http_requests.get(url, headers=HEADERS, timeout=15,
+                                 allow_redirects=True)
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "lxml")
 
-        # Remove structural noise tags
-        for tag in soup(["script", "style", "nav", "header", "footer",
-                         "aside", "form", "noscript", "iframe"]):
+        # Remove tags that never contain JD content
+        for tag in soup(["script", "style", "noscript", "iframe",
+                         "svg", "img", "video", "audio"]):
             tag.decompose()
 
-        # Remove elements whose class/id suggest UI noise
+        # Remove only clearly-UI chrome elements (conservative list)
         for el in soup.find_all(True):
             cls = " ".join(el.get("class", [])).lower()
             eid = (el.get("id") or "").lower()
-            if any(n in cls or n in eid for n in _NOISE_ATTRS):
+            if any(n in cls or n in eid for n in _NOISE_CLASSES):
                 el.decompose()
 
-        # Try targeted selectors first
+        # Strategy 1: targeted CSS selectors
         for selector in JD_SELECTORS:
             el = soup.select_one(selector)
             if el:
                 raw = el.get_text(separator="\n", strip=True)
                 text = _clean_jd_text(raw)
-                if len(text) > 200:
+                if len(text) > 300:
                     return text
 
-        # Fallback: collect all paragraphs and list items
-        parts = []
-        for tag in soup.find_all(["p", "li", "h1", "h2", "h3"]):
-            t = tag.get_text(strip=True)
-            if len(t) > 20:
-                parts.append(t)
-        raw = "\n".join(parts)
-        text = _clean_jd_text(raw)
-        if len(text) > 200:
-            return text
+        # Strategy 2: largest text block (find the div with most paragraph text)
+        best, best_len = "", 0
+        for div in soup.find_all(["div", "section"]):
+            t = div.get_text(separator="\n", strip=True)
+            if len(t) > best_len and len(t) < 50000:
+                best, best_len = t, len(t)
+        if best_len > 500:
+            text = _clean_jd_text(best)
+            if len(text) > 300:
+                return text
+
+        # Strategy 3: all paragraphs + list items
+        parts = [tag.get_text(strip=True)
+                 for tag in soup.find_all(["p", "li", "h1", "h2", "h3"])
+                 if len(tag.get_text(strip=True)) > 15]
+        if parts:
+            text = _clean_jd_text("\n".join(parts))
+            if len(text) > 300:
+                return text
 
         return ""
     except Exception:
