@@ -451,8 +451,27 @@ Return exactly this JSON (no extra text):
 
     try:
         groq_client = Groq(api_key=groq_key)
-        # try primary model, fall back to mixtral
-        for model in ["llama3-8b-8192", "mixtral-8x7b-32768"]:
+
+        # dynamically pick first available text model
+        try:
+            available = groq_client.models.list()
+            model_ids = [m.id for m in available.data if "whisper" not in m.id.lower()]
+        except Exception:
+            model_ids = []
+
+        # fallback list in case models.list() fails
+        fallback_models = [
+            "llama-3.1-8b-instant",
+            "llama-3.3-70b-versatile",
+            "llama3-8b-8192",
+            "gemma2-9b-it",
+            "gemma-7b-it",
+            "mixtral-8x7b-32768",
+        ]
+        models_to_try = model_ids if model_ids else fallback_models
+
+        resp = None
+        for model in models_to_try:
             try:
                 resp = groq_client.chat.completions.create(
                     model=model,
@@ -463,8 +482,9 @@ Return exactly this JSON (no extra text):
                 break
             except Exception:
                 continue
-        else:
-            raise HTTPException(status_code=500, detail="No Groq model available")
+
+        if resp is None:
+            raise HTTPException(status_code=500, detail="No Groq model available — check GROQ_API_KEY")
 
         raw = resp.choices[0].message.content.strip()
 
