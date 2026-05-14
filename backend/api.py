@@ -430,7 +430,10 @@ async def ats_score(
     if not row:
         raise HTTPException(status_code=400, detail="No resume uploaded")
 
-    groq_client = Groq(api_key=os.getenv("GROQ_API_KEY", ""))
+    groq_key = os.getenv("GROQ_API_KEY", "").strip()
+    if not groq_key:
+        raise HTTPException(status_code=500, detail="GROQ_API_KEY not configured")
+
     prompt = f"""You are an expert ATS (Applicant Tracking System) analyzer.
 Compare the resume against the job description and return ONLY a JSON object — no markdown, no explanation.
 
@@ -438,27 +441,60 @@ Job Title: {payload.job_title}
 Company: {payload.company}
 
 Job Description:
-{payload.job_description[:3000]}
+{payload.job_description[:2500]}
 
 Resume:
-{row.extracted_text[:3000]}
+{row.extracted_text[:2500]}
 
-Return exactly this JSON shape:
-{{"score": <integer 0-100>, "matching_skills": ["skill1", "skill2"], "missing_keywords": ["kw1", "kw2"], "recommendation": "<one sentence>"}}"""
+Return exactly this JSON (no extra text):
+{{"score": 75, "matching_skills": ["Python", "FastAPI"], "missing_keywords": ["Docker", "Kubernetes"], "recommendation": "Add more cloud experience to your resume."}}"""
 
-    resp = groq_client.chat.completions.create(
-        model="llama3-8b-8192",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.1,
-        max_tokens=600,
-    )
-    raw = resp.choices[0].message.content.strip()
-    # strip any markdown fences if model adds them
-    if raw.startswith("```"):
-        raw = raw.split("```")[1]
-        if raw.startswith("json"):
-            raw = raw[4:]
-    return json.loads(raw.strip())
+    try:
+        groq_client = Groq(api_key=groq_key)
+        # try primary model, fall back to mixtral
+        for model in ["llama3-8b-8192", "mixtral-8x7b-32768"]:
+            try:
+                resp = groq_client.chat.completions.create(
+                    model=model,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.1,
+                    max_tokens=600,
+                )
+                break
+            except Exception:
+                continue
+        else:
+            raise HTTPException(status_code=500, detail="No Groq model available")
+
+        raw = resp.choices[0].message.content.strip()
+
+        # strip markdown fences
+        if "```" in raw:
+            parts = raw.split("```")
+            for part in parts:
+                part = part.strip()
+                if part.startswith("json"):
+                    part = part[4:].strip()
+                if part.startswith("{"):
+                    raw = part
+                    break
+
+        # extract JSON object with regex fallback
+        import re
+        match = re.search(r'\{.*\}', raw, re.DOTALL)
+        if match:
+            raw = match.group(0)
+
+        result = json.loads(raw)
+        result["score"] = max(0, min(100, int(result.get("score", 0))))
+        return result
+
+    except HTTPException:
+        raise
+    except json.JSONDecodeError as e:
+        raise HTTPException(status_code=500, detail=f"Could not parse AI response: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 def _serialize(row: Application) -> dict:

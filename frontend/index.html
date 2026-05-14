@@ -733,7 +733,9 @@
 
                       <!-- Title row -->
                       <div class="flex items-start justify-between gap-3 mb-0.5">
-                        <h3 class="font-semibold text-sm leading-snug" style="color:var(--t1)"
+                        <h3 class="font-semibold text-sm leading-snug cursor-pointer hover:underline"
+                            style="color:var(--t1)"
+                            @click="openJob(job)"
                             x-text="job.title"></h3>
                         <span :class="sourcePillClass(job.source)"
                               class="pill text-xs flex-shrink-0 mt-0.5" x-text="job.source"></span>
@@ -770,13 +772,12 @@
 
                       <!-- Actions -->
                       <div class="flex items-center gap-2 flex-wrap">
-                        <a :href="job.url" target="_blank" rel="noopener noreferrer"
-                           class="btn btn-apply" style="font-size:12px;padding:6px 14px">
-                          Apply Now
-                          <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
-                            <path d="M5 12h14"/><path d="m12 5 7 7-7 7"/>
+                        <button @click="openJob(job)" class="btn btn-apply" style="font-size:12px;padding:6px 14px">
+                          <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>
                           </svg>
-                        </a>
+                          View JD
+                        </button>
 
                         <template x-if="user">
                           <button @click="markApplied(job)"
@@ -1033,6 +1034,119 @@
   </div>
   <!-- /main app -->
 
+  <!-- ═══════════════════════ JD DETAIL MODAL ═══════════════════════ -->
+  <div x-show="jobModal && selectedJob" x-cloak
+       class="fixed inset-0 z-50 flex items-center justify-center p-4"
+       style="background:rgba(0,0,0,0.75);backdrop-filter:blur(4px)"
+       @click.self="jobModal = false"
+       @keydown.escape.window="jobModal = false">
+
+    <div class="card w-full max-w-2xl flex flex-col" style="max-height:90vh;border-color:var(--border)">
+
+      <!-- Header -->
+      <div class="p-5 pb-4 flex-shrink-0" style="border-bottom:1px solid var(--border)">
+        <div class="flex items-start justify-between gap-4">
+          <div class="flex gap-3 items-start">
+            <div class="company-av flex-shrink-0">
+              <span x-text="(selectedJob?.company || selectedJob?.title || '?')[0].toUpperCase()"></span>
+            </div>
+            <div>
+              <h2 class="font-semibold text-base leading-snug" style="color:var(--t1)" x-text="selectedJob?.title"></h2>
+              <p class="text-sm mt-0.5" style="color:var(--t3)" x-text="selectedJob?.company"></p>
+              <div class="flex flex-wrap gap-1.5 mt-2">
+                <template x-if="selectedJob?.location">
+                  <span class="meta-tag">
+                    <svg class="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+                    <span x-text="selectedJob?.location"></span>
+                  </span>
+                </template>
+                <template x-if="selectedJob?.posted">
+                  <span class="meta-tag">
+                    <svg class="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+                    <span x-text="formatDate(selectedJob?.posted)"></span>
+                  </span>
+                </template>
+                <template x-if="selectedJob?.source">
+                  <span :class="sourcePillClass(selectedJob?.source)" class="pill text-xs" x-text="selectedJob?.source"></span>
+                </template>
+                <template x-if="selectedJob?.salary">
+                  <span class="pill text-xs" style="color:#34d399;background:rgba(16,185,129,0.08);border-color:rgba(16,185,129,0.18)" x-text="selectedJob?.salary"></span>
+                </template>
+              </div>
+            </div>
+          </div>
+          <button @click="jobModal = false" class="btn btn-ghost flex-shrink-0" style="padding:5px 8px">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- Job Description -->
+      <div class="flex-1 overflow-y-auto p-5">
+        <h3 class="lbl mb-3">Job Description</h3>
+        <template x-if="selectedJob?.description">
+          <div class="text-sm leading-relaxed whitespace-pre-wrap" style="color:var(--t2)" x-text="selectedJob?.description"></div>
+        </template>
+        <template x-if="!selectedJob?.description">
+          <p class="text-sm" style="color:var(--t3)">No description available. Click Apply to view on the job board.</p>
+        </template>
+      </div>
+
+      <!-- Footer actions -->
+      <div class="p-4 flex-shrink-0 flex items-center gap-2 flex-wrap" style="border-top:1px solid var(--border)">
+
+        <!-- ATS score area -->
+        <template x-if="user && resume && selectedJob">
+          <div class="flex items-center gap-2">
+            <template x-if="atsScores[selectedJob?.url]?.loading">
+              <button disabled class="btn btn-ghost" style="font-size:12px;padding:6px 12px;opacity:0.7">
+                <div class="spin-sm"></div> Scoring…
+              </button>
+            </template>
+            <template x-if="atsScores[selectedJob?.url] && !atsScores[selectedJob?.url].loading && !atsScores[selectedJob?.url].error">
+              <div class="flex flex-col gap-0.5">
+                <button class="btn" :style="atsScoreStyle(atsScores[selectedJob?.url].score)" style="font-size:12px;padding:6px 12px;cursor:default">
+                  ATS Score: <span x-text="atsScores[selectedJob?.url].score + '%'"></span>
+                </button>
+                <p class="text-xs" style="color:var(--t3)" x-show="atsScores[selectedJob?.url].recommendation" x-text="atsScores[selectedJob?.url].recommendation"></p>
+              </div>
+            </template>
+            <template x-if="atsScores[selectedJob?.url]?.error">
+              <div class="flex flex-col gap-0.5">
+                <button @click="getATSScore(selectedJob)" class="btn btn-ghost" style="font-size:12px;padding:6px 12px;color:#f87171">Retry ATS</button>
+                <p class="text-xs" style="color:#f87171" x-text="atsScores[selectedJob?.url].error"></p>
+              </div>
+            </template>
+            <template x-if="!atsScores[selectedJob?.url]">
+              <button @click="getATSScore(selectedJob)" class="btn btn-ghost" style="font-size:12px;padding:6px 12px">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+                Get ATS Score
+              </button>
+            </template>
+          </div>
+        </template>
+
+        <div class="flex-1"></div>
+
+        <template x-if="user">
+          <button @click="markApplied(selectedJob)"
+                  :disabled="appMap[selectedJob?.url]?.status === 'applied'"
+                  :style="appMap[selectedJob?.url]?.status === 'applied' ? 'border-color:rgba(52,211,153,0.35);color:#34d399;background:rgba(16,185,129,0.07)' : ''"
+                  class="btn btn-ghost" style="font-size:12px;padding:6px 12px">
+            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+            <span x-text="appMap[selectedJob?.url]?.status === 'applied' ? 'Applied' : 'Mark Applied'"></span>
+          </button>
+        </template>
+
+        <a :href="selectedJob?.url" target="_blank" rel="noopener noreferrer"
+           class="btn btn-apply" style="font-size:12px;padding:6px 16px">
+          Apply on <span x-text="selectedJob?.source"></span>
+          <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+        </a>
+      </div>
+    </div>
+  </div>
+
   <!-- ═══════════════════════ RESUME MODAL ═══════════════════════ -->
   <div x-show="resumeModal" x-cloak
        class="fixed inset-0 z-50 flex items-center justify-center p-4"
@@ -1152,6 +1266,10 @@
         resumeUploading: false,
         resumeError: null,
         atsScores: {},
+
+        // ── Job Detail ────────────────────────────────────
+        selectedJob: null,
+        jobModal: false,
 
         // ── Static ────────────────────────────────────────
         activeSources: [
@@ -1509,11 +1627,17 @@
               const data = await res.json();
               this.atsScores = { ...this.atsScores, [job.url]: { ...data, loading: false } };
             } else {
-              this.atsScores = { ...this.atsScores, [job.url]: { error: true, loading: false } };
+              const err = await res.json().catch(() => ({}));
+              this.atsScores = { ...this.atsScores, [job.url]: { error: err.detail || `Error ${res.status}`, loading: false } };
             }
           } catch (e) {
-            this.atsScores = { ...this.atsScores, [job.url]: { error: true, loading: false } };
+            this.atsScores = { ...this.atsScores, [job.url]: { error: e.message || 'Failed', loading: false } };
           }
+        },
+
+        openJob(job) {
+          this.selectedJob = job;
+          this.jobModal = true;
         },
 
         atsScoreStyle(score) {
