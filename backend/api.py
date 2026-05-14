@@ -600,88 +600,102 @@ async def ats_score(
     if not groq_key:
         raise HTTPException(status_code=500, detail="GROQ_API_KEY not configured")
 
-    resume_text = row.extracted_text[:3000]
-    jd_text     = payload.job_description[:3000]
+    # Use more text for accurate scoring against full JD
+    resume_text = row.extracted_text[:6000]
+    jd_text     = payload.job_description[:6000]
 
-    prompt = f"""You are a precise ATS (Applicant Tracking System) analyzer.
-
-Your task: compare the RESUME against the JOB DESCRIPTION and return a JSON ATS score.
-
-STRICT RULES:
-1. Only list a skill in "matching_skills" if it clearly appears in BOTH the resume AND the job description.
-2. Only list a keyword in "missing_keywords" if it appears in the job description but is genuinely ABSENT from the resume. Search carefully — check for abbreviations and variations (e.g. "K8s" = "Kubernetes", "JS" = "JavaScript").
-3. Do NOT hallucinate. Do NOT use example data. Base everything strictly on the texts provided.
-4. Score = percentage of JD requirements covered by the resume (0-100).
+    prompt = f"""You are an ATS (Applicant Tracking System) analyzer. Compare the resume against the job description.
 
 JOB TITLE: {payload.job_title}
 COMPANY: {payload.company}
 
---- JOB DESCRIPTION ---
+JOB DESCRIPTION:
 {jd_text}
 
---- RESUME ---
+RESUME:
 {resume_text}
 
-Return ONLY this JSON (no markdown, no explanation, no extra text):
-{{"score": <integer 0-100>, "matching_skills": [<skills found in BOTH texts>], "missing_keywords": [<important JD keywords NOT found in resume>], "recommendation": "<one specific sentence to improve the resume>"}}"""
+Rules:
+- matching_skills: skills/tools that appear in BOTH texts (check abbreviations: K8s=Kubernetes, JS=JavaScript, ML=Machine Learning)
+- missing_keywords: important technical requirements from JD that are NOT in the resume
+- score: 0-100 based on how well resume matches JD requirements
+
+Respond with ONLY valid JSON, nothing else:
+{{"score": 72, "matching_skills": ["Python", "SQL"], "missing_keywords": ["Terraform"], "recommendation": "Add Terraform experience to match the infrastructure requirements."}}"""
 
     try:
         groq_client = Groq(api_key=groq_key)
 
-        # dynamically pick first available text model
-        try:
-            available = groq_client.models.list()
-            model_ids = [m.id for m in available.data if "whisper" not in m.id.lower()]
-        except Exception:
-            model_ids = []
-
-        # fallback list in case models.list() fails
-        fallback_models = [
+        # Preferred models — ordered by reliability for JSON output
+        preferred = [
             "llama-3.1-8b-instant",
             "llama-3.3-70b-versatile",
-            "llama3-8b-8192",
             "gemma2-9b-it",
-            "gemma-7b-it",
+            "llama3-8b-8192",
             "mixtral-8x7b-32768",
         ]
-        models_to_try = model_ids if model_ids else fallback_models
 
-        resp = None
+        # Also try whatever models are available on this account
+        try:
+            available = groq_client.models.list()
+            account_models = [m.id for m in available.data
+                              if "whisper" not in m.id.lower()
+                              and "guard" not in m.id.lower()]
+        except Exception:
+            account_models = []
+
+        # Merge: preferred first, then any account models not already listed
+        models_to_try = preferred + [m for m in account_models if m not in preferred]
+
+        raw = None
+        last_err = ""
         for model in models_to_try:
             try:
                 resp = groq_client.chat.completions.create(
                     model=model,
                     messages=[{"role": "user", "content": prompt}],
                     temperature=0.1,
-                    max_tokens=600,
+                    max_tokens=800,
                 )
-                break
-            except Exception:
+                content = resp.choices[0].message.content
+                if content and content.strip():
+                    raw = content.strip()
+                    break
+                # empty response — try next model
+            except Exception as e:
+                last_err = str(e)
                 continue
 
-        if resp is None:
-            raise HTTPException(status_code=500, detail="No Groq model available — check GROQ_API_KEY")
+        if not raw:
+            raise HTTPException(
+                status_code=500,
+                detail=f"All Groq models returned empty responses. Last error: {last_err}"
+            )
 
-        raw = resp.choices[0].message.content.strip()
-
-        # strip markdown fences
+        # Strip markdown code fences if present
         if "```" in raw:
-            parts = raw.split("```")
-            for part in parts:
-                part = part.strip()
-                if part.startswith("json"):
-                    part = part[4:].strip()
+            for part in raw.split("```"):
+                part = part.strip().lstrip("json").strip()
                 if part.startswith("{"):
                     raw = part
                     break
 
-        # extract JSON object with regex fallback
-        match = re.search(r'\{.*\}', raw, re.DOTALL)
-        if match:
-            raw = match.group(0)
+        # Extract first JSON object
+        match = re.search(r'\{[^{}]*\}', raw, re.DOTALL)
+        if not match:
+            # Try greedy match for nested structures
+            match = re.search(r'\{.*\}', raw, re.DOTALL)
+        if not match:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Model did not return JSON. Got: {raw[:300]}"
+            )
 
-        result = json.loads(raw)
+        result = json.loads(match.group(0))
         result["score"] = max(0, min(100, int(result.get("score", 0))))
+        result.setdefault("matching_skills", [])
+        result.setdefault("missing_keywords", [])
+        result.setdefault("recommendation", "")
         return result
 
     except HTTPException:
