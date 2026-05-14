@@ -35,6 +35,47 @@ EUROPEAN_COUNTRIES = {
     'pl': 'Poland',
 }
 
+# Location keywords per country — used to post-filter non-Adzuna sources
+COUNTRY_KEYWORDS = {
+    'de': ['germany', 'deutschland', 'berlin', 'munich', 'münchen', 'frankfurt',
+           'hamburg', 'cologne', 'köln', 'düsseldorf', 'stuttgart', 'leipzig',
+           'dortmund', 'essen', 'bremen', 'hannover', 'nuremberg', 'nürnberg',
+           'bonn', 'karlsruhe', 'augsburg', 'wiesbaden', 'bielefeld'],
+    'gb': ['united kingdom', ' uk,', 'england', 'london', 'manchester',
+           'birmingham', 'leeds', 'glasgow', 'edinburgh', 'bristol',
+           'sheffield', 'liverpool', 'cardiff', 'scotland', 'wales'],
+    'fr': ['france', 'paris', 'lyon', 'marseille', 'toulouse', 'nice',
+           'nantes', 'bordeaux', 'strasbourg', 'lille', 'rennes'],
+    'nl': ['netherlands', 'holland', 'amsterdam', 'rotterdam', 'the hague',
+           'den haag', 'utrecht', 'eindhoven', 'tilburg', 'groningen'],
+    'ch': ['switzerland', 'schweiz', 'zurich', 'zürich', 'geneva', 'genf',
+           'bern', 'lausanne', 'basel', 'winterthur'],
+    'at': ['austria', 'österreich', 'vienna', 'wien', 'graz', 'linz', 'salzburg'],
+    'it': ['italy', 'italia', 'rome', 'roma', 'milan', 'milano', 'turin',
+           'torino', 'naples', 'napoli', 'florence', 'firenze'],
+    'es': ['spain', 'españa', 'madrid', 'barcelona', 'valencia',
+           'seville', 'sevilla', 'bilbao', 'málaga'],
+    'pl': ['poland', 'polska', 'warsaw', 'warszawa', 'krakow', 'kraków',
+           'wrocław', 'gdańsk', 'poznań'],
+}
+
+REMOTE_KEYWORDS = ['remote', 'worldwide', 'anywhere', 'global', 'work from home',
+                   'distributed', 'fully remote', 'home office']
+
+
+def _is_remote_job(job: dict) -> bool:
+    loc = (job.get('location') or '').lower()
+    country = (job.get('country') or '').lower()
+    return country == 'remote' or any(kw in loc for kw in REMOTE_KEYWORDS)
+
+
+def _location_matches_country(location: str, country_code: str) -> bool:
+    """True if location text suggests the job is in the given country."""
+    if not country_code:
+        return True
+    loc = location.lower()
+    return any(kw in loc for kw in COUNTRY_KEYWORDS.get(country_code, []))
+
 
 # ========================================
 # SOURCE 1: ADZUNA
@@ -616,7 +657,16 @@ def filter_by_experience(jobs, experience_level):
 
         ambiguous.append(job)                 # step 4: classify by YOE regex
 
-    kept.extend(_classify_by_yoe(ambiguous, level))
+    yoe_kept = _classify_by_yoe(ambiguous, level)
+
+    # For senior/lead: only keep ambiguous jobs that passed YOE check
+    # For entry/junior/mid: give benefit of doubt to jobs with no YOE signal
+    if level in ('senior', 'lead'):
+        kept.extend(yoe_kept)
+    else:
+        # Keep jobs that passed YOE + jobs with no YOE signal (already handled inside _classify_by_yoe)
+        kept.extend(yoe_kept)
+
     return kept
 
 
@@ -781,6 +831,37 @@ def filter_by_date(jobs, days_old):
             # no date found at all → excluded
 
     return kept
+
+
+def filter_by_country(jobs, country_code):
+    """Keep only jobs in the selected country.
+    Remote/worldwide jobs always pass through regardless of country selection.
+    Adzuna jobs already carry the correct country code.
+    Other sources are matched by location keywords.
+    """
+    if not country_code:
+        return jobs
+
+    result = []
+    for job in jobs:
+        # Remote jobs are always included (can be done from anywhere)
+        if _is_remote_job(job):
+            result.append(job)
+            continue
+
+        job_country = (job.get('country') or '').lower()
+
+        # Adzuna sets country to the ISO code — exact match
+        if job_country == country_code.lower():
+            result.append(job)
+            continue
+
+        # For other sources, check location text
+        location = (job.get('location') or '').lower()
+        if _location_matches_country(location, country_code):
+            result.append(job)
+
+    return result
 
 
 def filter_by_work_mode(jobs, work_mode):

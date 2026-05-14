@@ -42,7 +42,7 @@ from multi_source_search import (
     search_arbeitnow, search_remoteok, search_jobicy,
     search_hackernews, search_weworkremotely, search_graphql_jobs,
     search_workingnomads, filter_by_experience, filter_by_work_mode,
-    filter_by_date, deduplicate_jobs, calculate_match_score, EUROPEAN_COUNTRIES,
+    filter_by_date, filter_by_country, deduplicate_jobs, calculate_match_score, EUROPEAN_COUNTRIES,
 )
 
 Base.metadata.create_all(bind=engine)
@@ -241,20 +241,28 @@ async def search_jobs(params: SearchParams):
             all_jobs.extend(search_hackernews(params.job_title, params.max_results_per_source))
             all_jobs.extend(search_graphql_jobs(params.job_title, params.max_results_per_source))
 
-        # Enforce date cutoff on all sources (Adzuna filters server-side, others don't)
+        # Enforce date cutoff on all sources
         all_jobs = filter_by_date(all_jobs, params.days_old)
 
-        # Post-filter all results by title relevance (catches Adzuna loose matches too)
+        # Country filter — applied to ALL sources after collection
+        # Adzuna is already country-filtered server-side; this catches Arbeitnow + others
+        if params.country:
+            all_jobs = filter_by_country(all_jobs, params.country)
+
+        # Post-filter by title relevance
         if params.job_title:
             from multi_source_search import matches_query
             all_jobs = [j for j in all_jobs if matches_query(j.get('title', ''), j.get('description', ''), params.job_title)]
 
+        # Experience level filter
         if params.experience_level:
             all_jobs = filter_by_experience(all_jobs, params.experience_level)
 
-        # For hybrid, post-filter to only jobs that mention hybrid
+        # Work mode post-filter (hybrid needs keyword check)
         if mode == 'hybrid':
             all_jobs = filter_by_work_mode(all_jobs, 'hybrid')
+        elif mode == 'onsite':
+            all_jobs = filter_by_work_mode(all_jobs, 'onsite')
 
         total_before = len(all_jobs)
         unique_jobs  = deduplicate_jobs(all_jobs)
