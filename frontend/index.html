@@ -461,6 +461,18 @@
 
         <!-- User -->
         <div class="flex items-center gap-2.5">
+          <!-- Resume button -->
+          <button @click="resumeModal = true"
+                  class="btn btn-ghost text-xs relative" style="padding:5px 10px">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>
+            </svg>
+            Resume
+            <span x-show="resume"
+                  class="absolute -top-1 -right-1 w-2 h-2 rounded-full"
+                  style="background:#34d399"></span>
+          </button>
+
           <img :src="user?.picture || ''"
                :alt="user?.name || 'User'"
                class="w-7 h-7 rounded-full object-cover"
@@ -793,6 +805,44 @@
                             </svg>
                           </button>
                         </template>
+
+                        <!-- ATS Score button — only when resume is uploaded -->
+                        <template x-if="user && resume">
+                          <div>
+                            <template x-if="atsScores[job.url]?.loading">
+                              <button disabled class="btn btn-ghost" style="font-size:12px;padding:6px 12px;opacity:0.7">
+                                <div class="spin-sm"></div>
+                                Scoring…
+                              </button>
+                            </template>
+                            <template x-if="atsScores[job.url] && !atsScores[job.url].loading && !atsScores[job.url].error">
+                              <div class="flex flex-col gap-1">
+                                <button class="btn" :style="atsScoreStyle(atsScores[job.url].score)"
+                                        style="font-size:12px;padding:6px 12px;cursor:default">
+                                  ATS <span x-text="atsScores[job.url].score + '%'"></span>
+                                </button>
+                                <div class="text-xs" style="color:var(--t3);max-width:200px">
+                                  <template x-if="atsScores[job.url].missing_keywords?.length">
+                                    <span>Missing: <span style="color:#fbbf24" x-text="atsScores[job.url].missing_keywords.slice(0,3).join(', ')"></span></span>
+                                  </template>
+                                </div>
+                              </div>
+                            </template>
+                            <template x-if="atsScores[job.url]?.error">
+                              <button @click="getATSScore(job)" class="btn btn-ghost" style="font-size:12px;padding:6px 12px;color:#f87171">
+                                Retry ATS
+                              </button>
+                            </template>
+                            <template x-if="!atsScores[job.url]">
+                              <button @click="getATSScore(job)" class="btn btn-ghost" style="font-size:12px;padding:6px 12px">
+                                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                                  <path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
+                                </svg>
+                                Get ATS Score
+                              </button>
+                            </template>
+                          </div>
+                        </template>
                       </div>
                     </div>
                   </div>
@@ -983,6 +1033,73 @@
   </div>
   <!-- /main app -->
 
+  <!-- ═══════════════════════ RESUME MODAL ═══════════════════════ -->
+  <div x-show="resumeModal" x-cloak
+       class="fixed inset-0 z-50 flex items-center justify-center p-4"
+       style="background:rgba(0,0,0,0.7);backdrop-filter:blur(4px)"
+       @click.self="resumeModal = false">
+    <div class="card w-full max-w-md p-6 space-y-5" style="border-color:var(--border)">
+
+      <!-- Header -->
+      <div class="flex items-center justify-between">
+        <div>
+          <h2 class="text-base font-semibold" style="color:var(--t1)">Your Resume</h2>
+          <p class="text-xs mt-0.5" style="color:var(--t3)">Used to calculate ATS scores for job listings</p>
+        </div>
+        <button @click="resumeModal = false" class="btn btn-ghost" style="padding:5px 8px">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        </button>
+      </div>
+
+      <!-- Current resume -->
+      <template x-if="resume">
+        <div class="rounded-lg p-4 flex items-center gap-3" style="background:rgba(52,211,153,0.07);border:1px solid rgba(52,211,153,0.2)">
+          <svg class="w-8 h-8 flex-shrink-0" style="color:#34d399" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>
+            <line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/>
+          </svg>
+          <div class="flex-1 min-w-0">
+            <p class="text-sm font-medium truncate" style="color:var(--t1)" x-text="resume.filename"></p>
+            <p class="text-xs mt-0.5" style="color:var(--t3)" x-text="'Uploaded ' + formatDate(resume.uploaded_at)"></p>
+          </div>
+          <button @click="deleteResume()" class="btn btn-ghost" style="padding:5px 8px;color:#f87171;border-color:rgba(248,113,113,0.2)" title="Remove resume">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/></svg>
+          </button>
+        </div>
+      </template>
+
+      <!-- No resume -->
+      <template x-if="!resume">
+        <div class="rounded-lg p-4 text-center" style="background:rgba(255,255,255,0.02);border:1px dashed var(--border)">
+          <svg class="w-8 h-8 mx-auto mb-2" style="color:var(--t3)" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>
+          </svg>
+          <p class="text-sm" style="color:var(--t3)">No resume uploaded yet</p>
+        </div>
+      </template>
+
+      <!-- Error -->
+      <template x-if="resumeError">
+        <p class="text-xs rounded px-3 py-2" style="color:#f87171;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.2)" x-text="resumeError"></p>
+      </template>
+
+      <!-- Upload button -->
+      <label class="btn btn-primary w-full justify-center cursor-pointer" style="font-size:13px">
+        <template x-if="!resumeUploading">
+          <span class="flex items-center gap-2">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+            <span x-text="resume ? 'Replace Resume' : 'Upload Resume'"></span>
+          </span>
+        </template>
+        <template x-if="resumeUploading">
+          <span class="flex items-center gap-2"><div class="spin-sm"></div> Uploading…</span>
+        </template>
+        <input type="file" accept=".pdf,.docx" class="hidden" @change="uploadResume($event)" :disabled="resumeUploading">
+      </label>
+      <p class="text-xs text-center" style="color:var(--t3)">PDF or DOCX · Max 5 MB</p>
+    </div>
+  </div>
+
   <script>
     function jobRadar() {
       return {
@@ -1028,6 +1145,13 @@
         appsLoading: false,
         activeTab: 'search',
         dashFilter: 'all',
+
+        // ── Resume & ATS ──────────────────────────────────
+        resume: null,
+        resumeModal: false,
+        resumeUploading: false,
+        resumeError: null,
+        atsScores: {},
 
         // ── Static ────────────────────────────────────────
         activeSources: [
@@ -1075,6 +1199,7 @@
               if (res.ok) {
                 this.user = await res.json();
                 await this.loadApplications();
+                await this.loadResume();
               } else {
                 localStorage.removeItem('jr_token');
                 this.token = '';
@@ -1107,6 +1232,8 @@
           this.searched = false;
           this.stats = null;
           this.error = null;
+          this.resume = null;
+          this.atsScores = {};
         },
 
         // ─────────────────────────────────────────────────
@@ -1313,6 +1440,86 @@
             if (isNaN(d.getTime())) return s;
             return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
           } catch (_) { return s; }
+        },
+
+        // ─────────────────────────────────────────────────
+        // RESUME
+        // ─────────────────────────────────────────────────
+        async loadResume() {
+          try {
+            const res = await fetch('/api/resume', { headers: this.authHeaders() });
+            if (res.ok) this.resume = await res.json();
+          } catch (e) {}
+        },
+
+        async uploadResume(event) {
+          const file = event.target.files[0];
+          if (!file) return;
+          this.resumeUploading = true;
+          this.resumeError = null;
+          try {
+            const fd = new FormData();
+            fd.append('file', file);
+            const res = await fetch('/api/resume', {
+              method: 'POST',
+              headers: { 'Authorization': 'Bearer ' + this.token },
+              body: fd,
+            });
+            if (res.ok) {
+              const data = await res.json();
+              await this.loadResume();
+              this.atsScores = {};
+            } else {
+              const err = await res.json().catch(() => ({}));
+              this.resumeError = err.detail || 'Upload failed';
+            }
+          } catch (e) {
+            this.resumeError = 'Upload failed — please try again';
+          } finally {
+            this.resumeUploading = false;
+            event.target.value = '';
+          }
+        },
+
+        async deleteResume() {
+          try {
+            await fetch('/api/resume', { method: 'DELETE', headers: this.authHeaders() });
+            this.resume = null;
+            this.atsScores = {};
+          } catch (e) {}
+        },
+
+        // ─────────────────────────────────────────────────
+        // ATS SCORING
+        // ─────────────────────────────────────────────────
+        async getATSScore(job) {
+          if (!this.resume) return;
+          this.atsScores = { ...this.atsScores, [job.url]: { loading: true } };
+          try {
+            const res = await fetch('/api/ats-score', {
+              method: 'POST',
+              headers: this.authHeaders(),
+              body: JSON.stringify({
+                job_title: job.title,
+                company: job.company || '',
+                job_description: job.description || job.title,
+              }),
+            });
+            if (res.ok) {
+              const data = await res.json();
+              this.atsScores = { ...this.atsScores, [job.url]: { ...data, loading: false } };
+            } else {
+              this.atsScores = { ...this.atsScores, [job.url]: { error: true, loading: false } };
+            }
+          } catch (e) {
+            this.atsScores = { ...this.atsScores, [job.url]: { error: true, loading: false } };
+          }
+        },
+
+        atsScoreStyle(score) {
+          if (score >= 70) return 'background:rgba(16,185,129,0.12);color:#34d399;border:1px solid rgba(52,211,153,0.3)';
+          if (score >= 40) return 'background:rgba(245,158,11,0.12);color:#fbbf24;border:1px solid rgba(251,191,36,0.3)';
+          return 'background:rgba(239,68,68,0.12);color:#f87171;border:1px solid rgba(248,113,113,0.3)';
         },
       };
     }

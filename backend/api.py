@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env'))
 
-from fastapi import FastAPI, HTTPException, Depends, Request
+from fastapi import FastAPI, HTTPException, Depends, Request, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -20,9 +20,16 @@ from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime
 from sqlalchemy.orm import Session
+import io
+import json
+import boto3
+from botocore.config import Config as BotoConfig
+import pdfplumber
+from docx import Document as DocxDocument
+from groq import Groq
 
 from database import engine, get_db, Base
-from models import User, Application
+from models import User, Application, Resume
 from auth import (
     create_token, require_user, exchange_code_for_user,
     google_auth_url, GOOGLE_CLIENT_ID,
@@ -78,6 +85,45 @@ class ApplicationCreate(BaseModel):
 class ApplicationUpdate(BaseModel):
     status: Optional[str] = None
     notes:  Optional[str] = None
+
+
+class ATSRequest(BaseModel):
+    job_title:       str
+    company:         str = ""
+    job_description: str
+
+
+# ── Resume helpers ───────────────────────────────────────────────────────────
+
+def _extract_text(file_bytes: bytes, filename: str) -> str:
+    if filename.lower().endswith(".pdf"):
+        with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
+            return "\n".join(p.extract_text() or "" for p in pdf.pages)
+    else:
+        doc = DocxDocument(io.BytesIO(file_bytes))
+        return "\n".join(p.text for p in doc.paragraphs)
+
+
+def _upload_to_r2(file_bytes: bytes, key: str, content_type: str) -> bool:
+    account_id = os.getenv("R2_ACCOUNT_ID", "").strip()
+    access_key = os.getenv("R2_ACCESS_KEY_ID", "").strip()
+    secret_key = os.getenv("R2_SECRET_ACCESS_KEY", "").strip()
+    bucket     = os.getenv("R2_BUCKET_NAME", "jobradar-resumes").strip()
+    if not all([account_id, access_key, secret_key]):
+        return False
+    try:
+        client = boto3.client(
+            "s3",
+            endpoint_url=f"https://{account_id}.r2.cloudflarestorage.com",
+            aws_access_key_id=access_key,
+            aws_secret_access_key=secret_key,
+            config=BotoConfig(signature_version="s3v4"),
+            region_name="auto",
+        )
+        client.put_object(Bucket=bucket, Key=key, Body=file_bytes, ContentType=content_type)
+        return True
+    except Exception:
+        return False
 
 
 # ── Static files & frontend ─────────────────────────────────────────────────
@@ -315,6 +361,104 @@ def delete_application(
         raise HTTPException(status_code=404, detail="Not found")
     db.delete(row)
     db.commit()
+
+
+# ── Resume endpoints ─────────────────────────────────────────────────────────
+
+@app.post("/api/resume", status_code=201)
+async def upload_resume(
+    file:         UploadFile = File(...),
+    current_user: dict       = Depends(require_user),
+    db:           Session    = Depends(get_db),
+):
+    if not file.filename.lower().endswith((".pdf", ".docx")):
+        raise HTTPException(status_code=400, detail="Only PDF and DOCX files are supported")
+
+    file_bytes = await file.read()
+    if len(file_bytes) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="File too large — max 5 MB")
+
+    text = _extract_text(file_bytes, file.filename)
+    if not text.strip():
+        raise HTTPException(status_code=400, detail="Could not extract text from file")
+
+    r2_key = f"resumes/{current_user['user_id']}/{file.filename}"
+    _upload_to_r2(file_bytes, r2_key, file.content_type or "application/octet-stream")
+
+    existing = db.query(Resume).filter(Resume.user_id == current_user["user_id"]).first()
+    if existing:
+        existing.filename       = file.filename
+        existing.r2_key         = r2_key
+        existing.extracted_text = text
+        existing.uploaded_at    = datetime.utcnow()
+    else:
+        db.add(Resume(
+            user_id=current_user["user_id"],
+            filename=file.filename,
+            r2_key=r2_key,
+            extracted_text=text,
+        ))
+    db.commit()
+    return {"filename": file.filename}
+
+
+@app.get("/api/resume")
+def get_resume(current_user: dict = Depends(require_user), db: Session = Depends(get_db)):
+    row = db.query(Resume).filter(Resume.user_id == current_user["user_id"]).first()
+    if not row:
+        return None
+    return {"id": row.id, "filename": row.filename, "uploaded_at": row.uploaded_at.isoformat()}
+
+
+@app.delete("/api/resume", status_code=204)
+def delete_resume(current_user: dict = Depends(require_user), db: Session = Depends(get_db)):
+    row = db.query(Resume).filter(Resume.user_id == current_user["user_id"]).first()
+    if row:
+        db.delete(row)
+        db.commit()
+
+
+# ── ATS score ────────────────────────────────────────────────────────────────
+
+@app.post("/api/ats-score")
+async def ats_score(
+    payload:      ATSRequest,
+    current_user: dict    = Depends(require_user),
+    db:           Session = Depends(get_db),
+):
+    row = db.query(Resume).filter(Resume.user_id == current_user["user_id"]).first()
+    if not row:
+        raise HTTPException(status_code=400, detail="No resume uploaded")
+
+    groq_client = Groq(api_key=os.getenv("GROQ_API_KEY", ""))
+    prompt = f"""You are an expert ATS (Applicant Tracking System) analyzer.
+Compare the resume against the job description and return ONLY a JSON object — no markdown, no explanation.
+
+Job Title: {payload.job_title}
+Company: {payload.company}
+
+Job Description:
+{payload.job_description[:3000]}
+
+Resume:
+{row.extracted_text[:3000]}
+
+Return exactly this JSON shape:
+{{"score": <integer 0-100>, "matching_skills": ["skill1", "skill2"], "missing_keywords": ["kw1", "kw2"], "recommendation": "<one sentence>"}}"""
+
+    resp = groq_client.chat.completions.create(
+        model="llama3-8b-8192",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.1,
+        max_tokens=600,
+    )
+    raw = resp.choices[0].message.content.strip()
+    # strip any markdown fences if model adds them
+    if raw.startswith("```"):
+        raw = raw.split("```")[1]
+        if raw.startswith("json"):
+            raw = raw[4:]
+    return json.loads(raw.strip())
 
 
 def _serialize(row: Application) -> dict:

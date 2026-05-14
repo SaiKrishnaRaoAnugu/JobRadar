@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, DateTime, Float, ForeignKey
+from sqlalchemy import Column, Integer, String, Text, DateTime, Float, ForeignKey, UniqueConstraint
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from database import Base
@@ -15,6 +15,7 @@ class User(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     applications = relationship("Application", back_populates="user", cascade="all, delete-orphan")
+    resume       = relationship("Resume", back_populates="user", uselist=False, cascade="all, delete-orphan")
 
 
 class Application(Base):
@@ -34,3 +35,16 @@ class Application(Base):
     applied_date = Column(DateTime, default=datetime.utcnow)
 
     user = relationship("User", back_populates="applications")
+
+
+class Resume(Base):
+    __tablename__ = "resumes"
+
+    id             = Column(Integer, primary_key=True, index=True)
+    user_id        = Column(Integer, ForeignKey("users.id"), nullable=False, unique=True)
+    filename       = Column(String, nullable=False)
+    r2_key         = Column(String, nullable=True)
+    extracted_text = Column(Text, nullable=False)
+    uploaded_at    = Column(DateTime, default=datetime.utcnow)
+
+    user = relationship("User", back_populates="resume")
