@@ -441,7 +441,7 @@ HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
 }
 
-# Ordered list of CSS selectors to try for job description content
+# CSS selectors for the main JD container (tried in order)
 JD_SELECTORS = [
     "[class*='job-description']",
     "[class*='jobDescription']",
@@ -453,38 +453,105 @@ JD_SELECTORS = [
     "[class*='jobDetail']",
     "[class*='vacancy-description']",
     "[class*='listing-description']",
+    "[class*='job-content']",
+    "[class*='jobContent']",
     "article",
     "main",
     "[role='main']",
 ]
 
+# Elements whose class/id suggest UI noise — removed before extraction
+_NOISE_ATTRS = [
+    'similar', 'related', 'cookie', 'newsletter', 'sidebar',
+    'apply', 'social', 'share', 'email-alert', 'job-alert',
+    'subscribe', 'signup', 'sign-up', 'recommendation', 'cta',
+    'banner', 'popup', 'modal', 'overlay', 'footer', 'breadcrumb',
+    'navigation', 'suche', 'alert', 'notification',
+]
+
+# Line-level patterns that mark the end of the real JD content
+_CUTOFF_LINES = [
+    'ähnliche jobs', 'similar jobs', 'you might also like',
+    'related jobs', 'other jobs', 'more jobs like this',
+    'job-e-mail', 'jetzt ähnliche', 'nein, danke',
+    'mit dem klick auf', 'datenschutzbestimmungen',
+    'häufige suchvorgänge', 'zurück zur letzten suche',
+    'cookies zustimmen', 'impressum', 'subscribe to',
+    'get email alerts', 'sign up for job alerts',
+    'create a job alert', 'set up job alerts',
+    'agbs', 'datenschutz',
+]
+
+# Short noisy lines to strip out entirely
+_NOISE_LINES = [
+    'schnellbewerbung', 'auf diesen job bewerben', 'neu',
+    'back to search', 'zurück', '❮', '❯', 'apply now',
+    'job-e-mail bestellen', 'jetzt bewerben',
+]
+
+
+def _clean_jd_text(raw: str) -> str:
+    """Remove navigation noise and truncate at end-of-JD markers."""
+    lines = raw.splitlines()
+    cleaned = []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        line_lower = line.lower()
+        # Stop collecting once we hit a section-end marker
+        if any(cutoff in line_lower for cutoff in _CUTOFF_LINES):
+            break
+        # Skip known UI-noise lines
+        if any(noise in line_lower for noise in _NOISE_LINES):
+            continue
+        # Skip very short lines that are likely buttons/labels (< 4 words)
+        if len(line.split()) < 4 and not line.endswith(':'):
+            continue
+        cleaned.append(line)
+    return "\n".join(cleaned)
+
 
 def _scrape_jd(url: str) -> str:
     try:
-        resp = http_requests.get(url, headers=HEADERS, timeout=10, allow_redirects=True)
+        resp = http_requests.get(url, headers=HEADERS, timeout=12, allow_redirects=True)
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "lxml")
 
-        # Remove noise tags
-        for tag in soup(["script", "style", "nav", "header", "footer", "aside", "form", "noscript"]):
+        # Remove structural noise tags
+        for tag in soup(["script", "style", "nav", "header", "footer",
+                         "aside", "form", "noscript", "iframe"]):
             tag.decompose()
 
-        # Try each selector in order
+        # Remove elements whose class/id suggest UI noise
+        for el in soup.find_all(True):
+            cls = " ".join(el.get("class", [])).lower()
+            eid = (el.get("id") or "").lower()
+            if any(n in cls or n in eid for n in _NOISE_ATTRS):
+                el.decompose()
+
+        # Try targeted selectors first
         for selector in JD_SELECTORS:
             el = soup.select_one(selector)
             if el:
-                text = el.get_text(separator="\n", strip=True)
+                raw = el.get_text(separator="\n", strip=True)
+                text = _clean_jd_text(raw)
                 if len(text) > 200:
                     return text
 
-        # Fallback: all paragraphs
-        paragraphs = soup.find_all("p")
-        text = "\n".join(p.get_text(strip=True) for p in paragraphs if len(p.get_text(strip=True)) > 30)
+        # Fallback: collect all paragraphs and list items
+        parts = []
+        for tag in soup.find_all(["p", "li", "h1", "h2", "h3"]):
+            t = tag.get_text(strip=True)
+            if len(t) > 20:
+                parts.append(t)
+        raw = "\n".join(parts)
+        text = _clean_jd_text(raw)
         if len(text) > 200:
             return text
 
         return ""
-    except Exception as e:
+    except Exception:
         return ""
 
 
@@ -512,20 +579,30 @@ async def ats_score(
     if not groq_key:
         raise HTTPException(status_code=500, detail="GROQ_API_KEY not configured")
 
-    prompt = f"""You are an expert ATS (Applicant Tracking System) analyzer.
-Compare the resume against the job description and return ONLY a JSON object — no markdown, no explanation.
+    resume_text = row.extracted_text[:3000]
+    jd_text     = payload.job_description[:3000]
 
-Job Title: {payload.job_title}
-Company: {payload.company}
+    prompt = f"""You are a precise ATS (Applicant Tracking System) analyzer.
 
-Job Description:
-{payload.job_description[:2500]}
+Your task: compare the RESUME against the JOB DESCRIPTION and return a JSON ATS score.
 
-Resume:
-{row.extracted_text[:2500]}
+STRICT RULES:
+1. Only list a skill in "matching_skills" if it clearly appears in BOTH the resume AND the job description.
+2. Only list a keyword in "missing_keywords" if it appears in the job description but is genuinely ABSENT from the resume. Search carefully — check for abbreviations and variations (e.g. "K8s" = "Kubernetes", "JS" = "JavaScript").
+3. Do NOT hallucinate. Do NOT use example data. Base everything strictly on the texts provided.
+4. Score = percentage of JD requirements covered by the resume (0-100).
 
-Return exactly this JSON (no extra text):
-{{"score": 75, "matching_skills": ["Python", "FastAPI"], "missing_keywords": ["Docker", "Kubernetes"], "recommendation": "Add more cloud experience to your resume."}}"""
+JOB TITLE: {payload.job_title}
+COMPANY: {payload.company}
+
+--- JOB DESCRIPTION ---
+{jd_text}
+
+--- RESUME ---
+{resume_text}
+
+Return ONLY this JSON (no markdown, no explanation, no extra text):
+{{"score": <integer 0-100>, "matching_skills": [<skills found in BOTH texts>], "missing_keywords": [<important JD keywords NOT found in resume>], "recommendation": "<one specific sentence to improve the resume>"}}"""
 
     try:
         groq_client = Groq(api_key=groq_key)
