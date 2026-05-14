@@ -14,6 +14,10 @@ psycopg2-binary==2.9.10
 pydantic==2.11.4
 PyJWT==2.10.1
 
+# JD scraping
+beautifulsoup4==4.12.3
+lxml==5.2.1
+
 # File uploads & resume parsing (ATS feature)
 python-multipart==0.0.20
 pdfplumber==0.11.4

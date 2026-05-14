@@ -22,6 +22,9 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 import io
 import json
+import re
+import requests as http_requests
+from bs4 import BeautifulSoup
 import boto3
 from botocore.config import Config as BotoConfig
 import pdfplumber
@@ -85,6 +88,11 @@ class ApplicationCreate(BaseModel):
 class ApplicationUpdate(BaseModel):
     status: Optional[str] = None
     notes:  Optional[str] = None
+
+
+class FetchJDRequest(BaseModel):
+    url:    str
+    source: str = ""
 
 
 class ATSRequest(BaseModel):
@@ -418,6 +426,68 @@ def delete_resume(current_user: dict = Depends(require_user), db: Session = Depe
         db.commit()
 
 
+# ── Fetch full JD ────────────────────────────────────────────────────────────
+
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+    "Accept-Language": "en-US,en;q=0.9",
+}
+
+# Ordered list of CSS selectors to try for job description content
+JD_SELECTORS = [
+    "[class*='job-description']",
+    "[class*='jobDescription']",
+    "[class*='job_description']",
+    "[id*='job-description']",
+    "[id*='jobDescription']",
+    "[class*='description']",
+    "[class*='job-detail']",
+    "[class*='jobDetail']",
+    "[class*='vacancy-description']",
+    "[class*='listing-description']",
+    "article",
+    "main",
+    "[role='main']",
+]
+
+
+def _scrape_jd(url: str) -> str:
+    try:
+        resp = http_requests.get(url, headers=HEADERS, timeout=10, allow_redirects=True)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "lxml")
+
+        # Remove noise tags
+        for tag in soup(["script", "style", "nav", "header", "footer", "aside", "form", "noscript"]):
+            tag.decompose()
+
+        # Try each selector in order
+        for selector in JD_SELECTORS:
+            el = soup.select_one(selector)
+            if el:
+                text = el.get_text(separator="\n", strip=True)
+                if len(text) > 200:
+                    return text
+
+        # Fallback: all paragraphs
+        paragraphs = soup.find_all("p")
+        text = "\n".join(p.get_text(strip=True) for p in paragraphs if len(p.get_text(strip=True)) > 30)
+        if len(text) > 200:
+            return text
+
+        return ""
+    except Exception as e:
+        return ""
+
+
+@app.post("/api/fetch-jd")
+async def fetch_jd(payload: FetchJDRequest):
+    text = _scrape_jd(payload.url)
+    if not text:
+        raise HTTPException(status_code=422, detail="Could not extract full description from this job board.")
+    return {"description": text}
+
+
 # ── ATS score ────────────────────────────────────────────────────────────────
 
 @app.post("/api/ats-score")
@@ -500,7 +570,6 @@ Return exactly this JSON (no extra text):
                     break
 
         # extract JSON object with regex fallback
-        import re
         match = re.search(r'\{.*\}', raw, re.DOTALL)
         if match:
             raw = match.group(0)

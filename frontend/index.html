@@ -628,13 +628,46 @@
 
             <!-- Full JD -->
             <div class="p-6">
-              <h2 class="lbl mb-4">Job Description</h2>
-              <template x-if="selectedJob?.description">
-                <div class="text-sm leading-relaxed whitespace-pre-wrap" style="color:var(--t2);line-height:1.8" x-text="selectedJob?.description"></div>
+              <div class="flex items-center justify-between mb-4">
+                <h2 class="lbl">Job Description</h2>
+                <template x-if="selectedJob?.jdLoading">
+                  <div class="flex items-center gap-2 text-xs" style="color:var(--t3)">
+                    <div class="spin-sm"></div> Fetching full description…
+                  </div>
+                </template>
+              </div>
+
+              <!-- Loading skeleton -->
+              <template x-if="selectedJob?.jdLoading">
+                <div class="space-y-3">
+                  <div class="skel h-4 w-full"></div>
+                  <div class="skel h-4 w-5/6"></div>
+                  <div class="skel h-4 w-full"></div>
+                  <div class="skel h-4 w-4/6"></div>
+                  <div class="skel h-4 w-full"></div>
+                  <div class="skel h-4 w-3/4"></div>
+                </div>
               </template>
-              <template x-if="!selectedJob?.description">
+
+              <!-- Full scraped description -->
+              <template x-if="!selectedJob?.jdLoading && selectedJob?.fullDescription">
+                <div class="text-sm leading-relaxed whitespace-pre-wrap" style="color:var(--t2);line-height:1.8" x-text="selectedJob?.fullDescription"></div>
+              </template>
+
+              <!-- Fallback: partial description from API -->
+              <template x-if="!selectedJob?.jdLoading && !selectedJob?.fullDescription && selectedJob?.description">
+                <div>
+                  <div class="text-xs mb-3 px-3 py-2 rounded" style="background:rgba(251,191,36,0.08);border:1px solid rgba(251,191,36,0.2);color:#fbbf24">
+                    Could not load full description from the job board — showing API summary below.
+                  </div>
+                  <div class="text-sm leading-relaxed whitespace-pre-wrap" style="color:var(--t2);line-height:1.8" x-text="selectedJob?.description"></div>
+                </div>
+              </template>
+
+              <!-- No description at all -->
+              <template x-if="!selectedJob?.jdLoading && !selectedJob?.fullDescription && !selectedJob?.description">
                 <div class="rounded-lg p-6 text-center" style="background:rgba(255,255,255,0.02);border:1px dashed var(--border)">
-                  <p class="text-sm mb-3" style="color:var(--t3)">Full description not available in the API response.</p>
+                  <p class="text-sm mb-3" style="color:var(--t3)">Description not available. View on the job board directly.</p>
                   <a :href="selectedJob?.url" target="_blank" rel="noopener noreferrer" class="btn btn-apply" style="font-size:12px;padding:6px 16px">
                     View on <span x-text="selectedJob?.source"></span>
                     <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
@@ -1659,7 +1692,7 @@
               body: JSON.stringify({
                 job_title: job.title,
                 company: job.company || '',
-                job_description: job.description || job.title,
+                job_description: job.fullDescription || job.description || job.title,
               }),
             });
             if (res.ok) {
@@ -1674,10 +1707,26 @@
           }
         },
 
-        openJob(job) {
-          this.selectedJob = job;
+        async openJob(job) {
+          this.selectedJob = { ...job, fullDescription: null, jdLoading: true, jdError: false };
           this.jobDetailOpen = true;
           window.scrollTo(0, 0);
+
+          try {
+            const res = await fetch('/api/fetch-jd', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ url: job.url, source: job.source }),
+            });
+            if (res.ok) {
+              const data = await res.json();
+              this.selectedJob = { ...this.selectedJob, fullDescription: data.description, jdLoading: false };
+            } else {
+              this.selectedJob = { ...this.selectedJob, jdLoading: false, jdError: true };
+            }
+          } catch (e) {
+            this.selectedJob = { ...this.selectedJob, jdLoading: false, jdError: true };
+          }
         },
 
         closeJob() {
